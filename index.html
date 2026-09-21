@@ -442,6 +442,29 @@ textarea{resize:vertical}
 .history-status-text{font-size:15px;font-weight:600}
 .history-empty{text-align:center;padding:40px 16px;color:var(--text-3);font-size:14px}
 
+/* ===== NEW DAY DETAIL VIEW ===== */
+.history-topbar{display:flex;justify-content:space-between;align-items:center;padding:12px 0}
+.back-btn{background:none;border:none;font-size:16px;color:var(--accent);cursor:pointer;padding:4px 8px}
+.history-sync-status{font-size:11px;color:var(--text-3)}
+.history-date-header{margin-bottom:16px}
+.history-date-header h1{font-size:22px;font-weight:700}
+.history-date-header p{font-size:13px;color:var(--text-3);margin-top:2px}
+.history-card{background:var(--surface);border-radius:14px;padding:16px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+.history-card-title{font-size:14px;font-weight:600;color:var(--text-2);margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+.history-empty{font-size:13px;color:var(--text-3);padding:8px 0}
+.history-mood-display{display:flex;align-items:center;gap:12px}
+.history-mood-icon{width:40px;height:40px}
+.history-mood-icon svg{width:100%;height:100%}
+.history-mood-label{font-size:15px;font-weight:600;color:var(--text)}
+.history-approved{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600;color:var(--green,#34C759)}
+.approved-badge{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:var(--green,#34C759);color:#fff;font-size:12px}
+.history-fit-row,.history-read-item{display:flex;justify-content:space-between;align-items:center;padding:6px 0;font-size:13px}
+.history-label{color:var(--text-3)}
+.history-value{color:var(--text);font-weight:500}
+.history-read-item{justify-content:flex-start;gap:4px}
+.history-link-row{margin-top:10px;text-align:center}
+.history-link-btn{background:var(--border-2);border:1px solid var(--border);border-radius:8px;padding:8px 16px;font-size:13px;color:var(--accent);cursor:pointer;width:100%}
+
 /* ===== SYNC INDICATOR ===== */
 .sync-indicator{position:fixed;top:8px;right:8px;z-index:200;font-size:10px;color:var(--text-2);font-weight:500;display:flex;align-items:center;gap:4px;background:rgba(255,255,255,.82);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);padding:4px 10px;border-radius:20px;border:1px solid var(--border-2);max-width:500px}
 .sync-dot{width:6px;height:6px;border-radius:50%;background:var(--text-3);transition:background .3s;flex-shrink:0}
@@ -2942,84 +2965,116 @@ function renderFitChart(){
 }
 function renderHistory(){
   var ds=state.historyDate||getTodayISO();
-  var d=new Date(ds+'T00:00:00');
-  var approval=getApproval(ds);
-  var energy=state.energyHistory[ds];
-  var opinion=state.opinionHistory[ds]||'';
-  var html='<div class="page history-page">';
-  html+='<div class="history-back" data-action="back-from-history">\u2190 返回</div>';
-  html+='<div class="history-date">'+formatDateDisplay(d)+'</div>';
-  html+='<div class="history-sub">'+(isWeekend(d)?'周末':'工作日')+'</div>';
-  var statusIcon=approval==='approved'?'\u2713':approval==='rejected'?'\u2717':'\u2014';
-  var statusText=approval==='approved'?'满意 \u00b7 Approved':approval==='rejected'?'不满意 \u00b7 Rejected':'未记录 \u00b7 No Record';
-  html+='<div class="history-status"><div class="history-status-icon '+approval+'">'+statusIcon+'</div><span class="history-status-text">'+statusText+'</span></div>';
-  if(energy){
-    var labels={energy:'Energy 精力',focus:'Focus 专注',mood:'Mood 情绪'};
-    html+='<div class="energy-card"><div class="section-header">当日状态</div>';
-    ['energy','focus','mood'].forEach(function(k){
-      var val=energy[k]||0;
-      html+='<div class="energy-row"><span class="energy-label">'+labels[k]+'</span><div class="energy-dots">';
-      for(var i=1;i<=5;i++)html+='<div class="energy-dot'+(i<=val?' active':'')+'"></div>';
-      html+='</div></div>';
-    });
-    html+='</div>';
-  }
-  if(opinion){
-    html+='<div class="opinion-card"><div class="section-header">当日观点</div><p style="font-size:13px;color:var(--text);line-height:1.5;white-space:pre-wrap">'+opinion+'</p></div>';
-  }
-  var dayExtras=state.opinionExtras&&state.opinionExtras[ds]?state.opinionExtras[ds]:[];
-  for(var ei=0;ei<dayExtras.length;ei++){
-    if(dayExtras[ei].text&&dayExtras[ei].text.trim()){
-      html+='<div class="opinion-card"><div class="section-header">补充想法 '+(ei+1)+'</div><p style="font-size:13px;color:var(--text);line-height:1.5;white-space:pre-wrap">'+dayExtras[ei].text+'</p></div>';
+  return '<div class="page history-page">'+renderDayDetail(ds)+'</div>';
+}
+function renderDayDetail(dateStr){
+  var d=new Date(dateStr+'T00:00:00');
+  var dow=['日','一','二','三','四','五','六'][d.getDay()];
+  var isWeekend=(d.getDay()===0||d.getDay()===6);
+  var html='';
+  /* Top bar with back button */
+  html+='<div class="history-topbar"><button class="back-btn" data-action="back-from-history">\u2190 返回</button>';
+  var syncStatus=state.lastSync?(new Date(state.lastSync).toLocaleDateString()===new Date().toLocaleDateString()?'已同步':'未同步'):'未同步';
+  html+='<span class="history-sync-status">'+syncStatus+'</span></div>';
+  /* Date header */
+  html+='<div class="history-date-header">';
+  html+='<h1>'+(d.getMonth()+1)+'月'+d.getDate()+'日 周'+dow+'</h1>';
+  if(isWeekend)html+='<p>周末</p>';
+  html+='</div>';
+  /* 1. Mood Weather */
+  var mood=state.moodWeather&&state.moodWeather[dateStr];
+  html+='<div class="history-card">';
+  html+='<div class="history-card-title">心情晴雨表</div>';
+  if(mood){
+    var moodOpt=null;
+    for(var i=0;i<MOOD_WEATHER_OPTIONS.length;i++){
+      if(MOOD_WEATHER_OPTIONS[i].value===mood){moodOpt=MOOD_WEATHER_OPTIONS[i];break}
     }
+    if(moodOpt){
+      html+='<div class="history-mood-display">';
+      html+='<div class="history-mood-icon">'+moodOpt.svg+'</div>';
+      html+='<div class="history-mood-label">'+moodOpt.label+'</div>';
+      html+='</div>';
+    }
+  }else{
+    html+='<div class="history-empty">未记录</div>';
   }
-  var taskHist=state.taskHistory[ds];
-  if(taskHist){
-    if(taskHist.day&&taskHist.day.length>0){
-      html+='<div class="history-task-section"><div class="section-header">白天任务</div><ul class="history-task-list">';
-      for(var i=0;i<taskHist.day.length;i++){
-        var t=taskHist.day[i];
-        var cat=findCat('day',t.category);
-        var catName=cat?cat.name:'';
-        html+='<li class="history-task-item"><div class="history-task-check '+(t.completed?'done':'undone')+'">'+(t.completed?'\u2713':'')+'</div><span>'+t.title+'</span>'+(catName?'<span class="task-badge" style="background:#F2F2F7;color:#6E6E73">'+catName+'</span>':'')+'</li>';
+  html+='</div>';
+  /* 2. Approval / Satisfaction */
+  var isApproved=state.dailyApproval&&state.dailyApproval[dateStr]===true;
+  html+='<div class="history-card">';
+  html+='<div class="history-card-title">满意度</div>';
+  if(isApproved){
+    html+='<div class="history-approved"><span class="approved-badge">\u2713</span> 满意 \u00b7 Approved</div>';
+  }else{
+    html+='<div class="history-empty">未记录</div>';
+  }
+  html+='</div>';
+  /* 3. Fitness Data */
+  var fitLog=state.fitnessLogs&&state.fitnessLogs[dateStr];
+  var hasFitData=fitLog&&(fitLog.completed||fitLog.weight||fitLog.bodyFat||fitLog.muscle||fitLog.waist);
+  html+='<div class="history-card">';
+  html+='<div class="history-card-title">健身</div>';
+  if(hasFitData){
+    if(fitLog.completed){
+      var statusMap={good:'\u{1F7E2} 状态好',average:'\u{1F7E1} 一般',poor:'\u{1F534} 较差'};
+      html+='<div class="history-fit-row"><span class="history-label">训练完成</span><span class="history-value">\u2713 已完成'+(fitLog.status?' \u00b7 '+statusMap[fitLog.status]:'')+'</span></div>';
+    }
+    if(fitLog.weight)html+='<div class="history-fit-row"><span class="history-label">体重</span><span class="history-value">'+fitLog.weight+' kg</span></div>';
+    if(fitLog.bodyFat)html+='<div class="history-fit-row"><span class="history-label">体脂率</span><span class="history-value">'+fitLog.bodyFat+'%</span></div>';
+    if(fitLog.muscle)html+='<div class="history-fit-row"><span class="history-label">骨骼肌</span><span class="history-value">'+fitLog.muscle+' kg</span></div>';
+    if(fitLog.waist)html+='<div class="history-fit-row"><span class="history-label">腰围</span><span class="history-value">'+fitLog.waist+' cm</span></div>';
+    html+='<div class="history-link-row"><button class="history-link-btn" data-action="go-fit">查看训练详情 \u2192</button></div>';
+  }else{
+    html+='<div class="history-empty">无训练记录</div>';
+  }
+  html+='</div>';
+  /* 4. Reading Status */
+  var hasReadLog=false;
+  var readDetail='';
+  /* Check article reading log - articleLogs is keyed by date, each date has article IDs */
+  if(state.articleLogs&&state.articleLogs[dateStr]){
+    for(var aid in state.articleLogs[dateStr]){
+      var artLog=state.articleLogs[dateStr][aid];
+      if(artLog&&artLog.completed){
+        hasReadLog=true;
+        var article=null;
+        if(state.articles){
+          for(var aj=0;aj<state.articles.length;aj++){
+            if(state.articles[aj].id===aid){article=state.articles[aj];break}
+          }
+        }
+        readDetail+='<div class="history-read-item">\u{1F4F0} '+(article?article.titleEn||article.titleZh:'外刊')+'</div>';
       }
-      html+='</ul></div>';
     }
-    if(taskHist.night&&taskHist.night.length>0){
-      html+='<div class="history-task-section"><div class="section-header">晚上任务</div><ul class="history-task-list">';
-      for(var j=0;j<taskHist.night.length;j++){
-        var tn=taskHist.night[j];
-        var ncat=findCat('night',tn.category);
-        var ncatName=ncat?ncat.name:'';
-        html+='<li class="history-task-item"><div class="history-task-check '+(tn.completed?'done':'undone')+'">'+(tn.completed?'\u2713':'')+'</div><span>'+tn.title+'</span>'+(ncatName?'<span class="task-badge" style="background:#F2F2F7;color:#6E6E73">'+ncatName+'</span>':'')+'</li>';
+  }
+  /* Check book reading log */
+  if(state.readingBooks){
+    for(var bi=0;bi<state.readingBooks.length;bi++){
+      var book=state.readingBooks[bi];
+      if(book.history){
+        for(var hi=0;hi<book.history.length;hi++){
+          if(book.history[hi].date===dateStr){
+            hasReadLog=true;
+            readDetail+='<div class="history-read-item">\u{1F4D6} '+book.title;
+            if(book.history[hi].page)readDetail+=' \u00b7 第'+book.history[hi].page+'页';
+            if(book.history[hi].note)readDetail+=' \u00b7 '+book.history[hi].note;
+            readDetail+='</div>';
+          }
+        }
       }
-      html+='</ul></div>';
     }
   }
-  var dayOutputs=state.outputs.filter(function(o){return o.date===ds});
-  if(dayOutputs.length>0){
-    html+='<div class="history-task-section"><div class="section-header">当日成果</div>';
-    for(var k=0;k<dayOutputs.length;k++){
-      html+='<div class="history-task-item"><div class="history-task-check done">\u2713</div><span>'+dayOutputs[k].title+'</span><span class="task-badge" style="background:#F2F2F7;color:#6E6E73">'+dayOutputs[k].type+'</span></div>';
-    }
-    html+='</div>';
+  html+='<div class="history-card">';
+  html+='<div class="history-card-title">阅读</div>';
+  if(hasReadLog){
+    html+=readDetail;
+    html+='<div class="history-link-row"><button class="history-link-btn" data-action="go-read">查看阅读详情 \u2192</button></div>';
+  }else{
+    html+='<div class="history-empty">无阅读记录</div>';
   }
-  var fitLog=state.fitnessLogs[ds];
-  if(fitLog&&(fitLog.completed||fitLog.status||fitLog.weight||fitLog.bodyFat||fitLog.muscle||fitLog.waist||(fitLog.exercises&&Object.keys(fitLog.exercises).length>0))){
-    html+='<div class="history-task-section"><div class="section-header">训练记录</div>';
-    if(fitLog.completed)html+='<div class="history-task-item"><div class="history-task-check done">\u2713</div><span>训练完成</span>'+(fitLog.status?'<span class="task-badge" style="background:#F2F2F7;color:#6E6E73">'+{good:'\u{1F7E2} 好',average:'\u{1F7E1} 一般',poor:'\u{1F534} 差'}[fitLog.status]+'</span>':'')+'</div>';
-    if(fitLog.weight)html+='<div class="history-task-item"><span style="color:var(--text-3);font-size:12px;width:60px">体重</span><span>'+(fitLog.weight||'-')+' kg</span></div>';
-    if(fitLog.bodyFat)html+='<div class="history-task-item"><span style="color:var(--text-3);font-size:12px;width:60px">体脂率</span><span>'+(fitLog.bodyFat||'-')+'%</span></div>';
-    if(fitLog.muscle)html+='<div class="history-task-item"><span style="color:var(--text-3);font-size:12px;width:60px">骨骼肌</span><span>'+(fitLog.muscle||'-')+' kg</span></div>';
-    if(fitLog.waist)html+='<div class="history-task-item"><span style="color:var(--text-3);font-size:12px;width:60px">腰围</span><span>'+(fitLog.waist||'-')+' cm</span></div>';
-    if(fitLog.cardioNote)html+='<div class="history-task-item"><span style="color:var(--text-3);font-size:12px;width:60px">有氧</span><span style="font-size:12px">'+fitLog.cardioNote+'</span></div>';
-    html+='<div style="text-align:center;padding:6px 0"><span class="fit-link" data-action="go-fit" style="font-size:12px;font-weight:600;color:var(--accent);cursor:pointer">\u{1F3CB} 前往Fit查看详情 \u2192</span></div>';
-    html+='</div>';
-  }
-  if(!energy&&!opinion&&!taskHist&&dayOutputs.length===0&&!fitLog){
-    html+='<div class="history-empty">这一天没有更多记录</div>';
-  }
-  html+='</div>';return html;
+  html+='</div>';
+  return html;
 }
 
 /* ===== ACTIONS ===== */
@@ -3226,6 +3281,7 @@ function handleClick(e){
     case 'set-fit-status':setFitStatus(ds.status,ds.date);break;
     case 'fit-chart-range':state.fitChartRange=ds.value;saveState();render();break;
     case 'go-fit':navigate('fit');break;
+    case 'go-read':navigate('read');break;
     case 'go-growth':state.growthView='output';navigate('growth');break;
     case 'go-fit-today':state.fitView='today';navigate('fit');break;
     case 'go-day':navigate('day');break;
