@@ -1394,41 +1394,105 @@ var SUPABASE_URL='https://ixugqhnsttonuzgovqlc.supabase.co';
 var SUPABASE_KEY='sb_publishable_qkQknm5KUViZ23xR7Tdn5w_cLylz4RD';
 var cloudSyncEnabled=!!(SUPABASE_URL&&SUPABASE_KEY);
 var saveTimer,cloudSyncTimer;
+var cloudReady=false,cloudSaving=false,cloudDirty=false,cloudBlocked=false;
+var cloudVersion=null,cloudRowExists=false;
+var pendingCloudData=null;
+var BACKUP_KEY=STORAGE_KEY+'_recovery_backup';
 
+function backupData(value,reason){
+  try{
+    var backups=JSON.parse(localStorage.getItem(BACKUP_KEY)||'[]');
+    backups.push({savedAt:new Date().toISOString(),reason:reason,data:value});
+    localStorage.setItem(BACKUP_KEY,JSON.stringify(backups.slice(-5)));
+  }catch(e){console.warn('无法保存恢复备份',e)}
+}
 function loadState(){
   try{var raw=localStorage.getItem(STORAGE_KEY);if(!raw)return null;var s=JSON.parse(raw);if(!s.tasks)return null;return s}catch(e){return null}
 }
-function saveState(){state.updatedAt=Date.now();try{localStorage.setItem(STORAGE_KEY,JSON.stringify(state))}catch(e){}debouncedCloudSync()}
+function saveState(){
+  state.updatedAt=Math.max(Date.now(),(state.updatedAt||0)+1);
+  try{localStorage.setItem(STORAGE_KEY,JSON.stringify(state))}catch(e){updateSyncStatus('error');console.error('本地保存失败',e);return}
+  debouncedCloudSync();
+}
 function debouncedSave(){clearTimeout(saveTimer);saveTimer=setTimeout(saveState,400)}
-function debouncedCloudSync(){if(!cloudSyncEnabled)return;clearTimeout(cloudSyncTimer);cloudSyncTimer=setTimeout(cloudSyncSave,800)}
-function cloudSyncSave(){
-  if(!cloudSyncEnabled)return;updateSyncStatus('syncing');
-  fetch(SUPABASE_URL+'/rest/v1/growth_os_data',{method:'POST',headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+SUPABASE_KEY,'Content-Type':'application/json','Prefer':'return=minimal,resolution=merge-duplicates'},body:JSON.stringify({id:'main',data:state})}).then(function(res){if(res.ok)updateSyncStatus('synced');else updateSyncStatus('error')}).catch(function(){updateSyncStatus('error')});
+function debouncedCloudSync(){
+  if(!cloudSyncEnabled||!cloudReady||cloudBlocked)return;
+  clearTimeout(cloudSyncTimer);
+  cloudSyncTimer=setTimeout(cloudSyncSave,800);
 }
 function cloudSyncLoad(){
-  if(!cloudSyncEnabled)return Promise.resolve(null);
-  return fetch(SUPABASE_URL+'/rest/v1/growth_os_data?id=eq.main&select=data',{headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+SUPABASE_KEY}}).then(function(res){if(!res.ok)return null;return res.json()}).then(function(data){if(data&&data.length>0)return data[0].data;return null}).catch(function(){return null});
+  return fetch(SUPABASE_URL+'/rest/v1/growth_os_data?id=eq.main&select=data',{
+    headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+SUPABASE_KEY,'Cache-Control':'no-cache'},cache:'no-store'
+  }).then(function(res){if(!res.ok)throw Error('云端读取失败 HTTP '+res.status);return res.json()})
+    .then(function(rows){return rows&&rows.length?{exists:true,data:rows[0].data}:{exists:false,data:null}});
+}
+function cloudSyncSave(){
+  if(!cloudReady||cloudBlocked)return;
+  cloudDirty=true;
+  if(cloudSaving)return;
+  cloudSaving=true;
+  function flush(){
+    if(!cloudDirty||cloudBlocked){cloudSaving=false;return}
+    cloudDirty=false;
+    var snapshot=JSON.parse(JSON.stringify(state));
+    var headers={'apikey':SUPABASE_KEY,'Authorization':'Bearer '+SUPABASE_KEY,
+      'Content-Type':'application/json','Prefer':'return=representation'};
+    var request;
+    if(cloudRowExists){
+      var filter=cloudVersion===null?'is.null':'eq.'+cloudVersion;
+      request={method:'PATCH',headers:headers,
+        body:JSON.stringify({data:snapshot})};
+      var url=SUPABASE_URL+'/rest/v1/growth_os_data?id=eq.main&data->>updatedAt='+encodeURIComponent(filter)+'&select=data';
+    }else{
+      headers.Prefer='resolution=ignore-duplicates,return=representation';
+      request={method:'POST',headers:headers,body:JSON.stringify({id:'main',data:snapshot})};
+      var url=SUPABASE_URL+'/rest/v1/growth_os_data?select=data';
+    }
+    updateSyncStatus('syncing');
+    fetch(url,request).then(function(res){
+      if(!res.ok)throw Error('云端保存失败 HTTP '+res.status);
+      return res.json();
+    }).then(function(rows){
+      if(!rows||rows.length!==1){
+        cloudBlocked=true;backupData(snapshot,'云端版本冲突');
+        updateSyncStatus('conflict');
+        alert('云端数据已被其他页面修改。当前数据已备份在本浏览器；为避免覆盖，同步已暂停。请关闭其他标签页并导出本地备份后再处理。');
+        return;
+      }
+      cloudRowExists=true;cloudVersion=snapshot.updatedAt||null;
+      if(cloudDirty)flush();else{cloudSaving=false;updateSyncStatus('synced')}
+    }).catch(function(err){
+      cloudSaving=false;cloudDirty=true;updateSyncStatus('error');console.error(err);
+      // 网络异常后写入结果可能未知，必须重新读取版本，不自动盲目重试。
+      cloudBlocked=true;backupData(snapshot,'云端写入状态未知');
+    });
+  }
+  flush();
 }
 function hasSignificantData(s){
-  if(!s)return false;
-  var score=0;
-  if(s.outputs&&s.outputs.length>0)score+=s.outputs.length;
-  if(s.energyHistory)score+=Object.keys(s.energyHistory).length;
-  if(s.taskHistory)score+=Object.keys(s.taskHistory).length;
-  if(s.opinionHistory)score+=Object.keys(s.opinionHistory).length;
-  if(s.fitnessLogs)score+=Object.keys(s.fitnessLogs).length;
-  if(s.monthlyReports&&s.monthlyReports.length>0)score+=s.monthlyReports.length*5;
-  if(s.readingBooks&&s.readingBooks.length>0)score+=s.readingBooks.length;
-  if(s.beliefs&&s.beliefs.length>0)score+=s.beliefs.length;
-  if(s.top3Archive&&s.top3Archive.length>0)score+=s.top3Archive.length;
-  return score>=2;
+  if(!s||!s.tasks)return false;
+  var copy=JSON.parse(JSON.stringify(s)),def=getDefaultData();
+  return !!(Object.keys(copy.taskHistory||{}).length||Object.keys(copy.fitnessLogs||{}).length||
+    Object.keys(copy.opinionHistory||{}).length||Object.keys(copy.energyHistory||{}).length||
+    (copy.readingBooks||[]).length||(copy.articles||[]).length||(copy.vocabWords||[]).length||
+    (copy.outputs||[]).some(function(o){return !def.outputs.some(function(d){return d.id===o.id})})||
+    JSON.stringify(copy.tasks)!==JSON.stringify(def.tasks));
+}
+function exportRecoveryData(){
+  var bundle={exportedAt:new Date().toISOString(),currentState:state};
+  try{bundle.backups=JSON.parse(localStorage.getItem(BACKUP_KEY)||'[]')}catch(e){bundle.backups=[]}
+  var blob=new Blob([JSON.stringify(bundle,null,2)],{type:'application/json'});
+  var url=URL.createObjectURL(blob),link=document.createElement('a');
+  link.href=url;link.download='do-it-recovery-'+new Date().toISOString().slice(0,10)+'.json';
+  document.body.appendChild(link);link.click();link.remove();
+  setTimeout(function(){URL.revokeObjectURL(url)},60000);
 }
 function updateSyncStatus(status){
   var el=document.getElementById('sync-indicator');if(!el)return;
-  var dot=el.querySelector('.sync-dot'),text=el.querySelector('.sync-text');if(!dot||!text)return;
+  var dot=el.querySelector('.sync-dot'),label=el.querySelector('.sync-text');if(!dot||!label)return;
   dot.className='sync-dot '+status;
-  var labels={offline:'本地',syncing:'同步中',synced:'已同步',error:'同步失败'};
-  text.textContent=labels[status]||'本地';
+  var labels={offline:'本地',syncing:'同步中',synced:'已同步',error:'同步失败',conflict:'同步冲突',loading:'读取云端'};
+  label.textContent=labels[status]||'本地';
 }
 
 /* ===== STATE ===== */
@@ -3505,52 +3569,53 @@ function ensureStateDefaults(){
   delete state.vocabLoading;
   delete state.growthStage;delete state.stageStart;delete state.stageEnd;delete state.monthlyRate;delete state.monthlyReview;
 }
-function init(){
-  ensureStateDefaults();
-  archiveDailyTasks();
-  checkTop3Archive();
-  checkMonthlyReport();
-  loadDailyOpinion();
+function finishInit(){
+  ensureStateDefaults();archiveDailyTasks();checkTop3Archive();checkMonthlyReport();loadDailyOpinion();
   document.getElementById('app').addEventListener('click',handleClick);
   document.getElementById('app').addEventListener('input',handleInput);
   document.getElementById('app').addEventListener('change',handleChange);
   document.getElementById('app').addEventListener('keydown',handleKeydown);
   document.getElementById('bottom-nav').addEventListener('click',handleClick);
   render();
-  if(cloudSyncEnabled){
-    var indicator=document.createElement('div');
-    indicator.className='sync-indicator';indicator.id='sync-indicator';
-    indicator.innerHTML='<div class="sync-dot syncing"></div><span class="sync-text">同步中</span>';
-    document.body.appendChild(indicator);
-    cloudSyncLoad().then(function(cloudData){
-      if(cloudData&&cloudData.tasks){
-        var localTS=state.updatedAt||0;
-        var cloudTS=cloudData.updatedAt||0;
-        var localHasData=hasSignificantData(state);
-        var cloudHasData=hasSignificantData(cloudData);
-        var useCloud=false;
-        if(cloudHasData&&!localHasData){
-          useCloud=true;
-        }else if(cloudHasData&&localHasData){
-          if(!localTS){
-            useCloud=false;
-          }else if(cloudTS>localTS){
-            useCloud=true;
-          }
-        }
-        if(useCloud){
-          state=cloudData;ensureStateDefaults();migrateState();
-          archiveDailyTasks();checkTop3Archive();checkMonthlyReport();loadDailyOpinion();
-          try{localStorage.setItem(STORAGE_KEY,JSON.stringify(state))}catch(e){}
-          render();updateSyncStatus('synced');
-        }else{
-          if(localHasData&&!localTS)state.updatedAt=Date.now();
-          if(localHasData)saveState();
-          updateSyncStatus('synced');
-        }
-      }else{updateSyncStatus('offline')}
-    });
-  }
+}
+function init(){
+  if(!cloudSyncEnabled){finishInit();return}
+  var indicator=document.createElement('div');
+  indicator.className='sync-indicator';indicator.id='sync-indicator';
+  indicator.innerHTML='<div class="sync-dot syncing"></div><span class="sync-text">读取云端</span>';
+  document.body.appendChild(indicator);
+  var exportButton=document.createElement('button');
+  exportButton.textContent='导出数据/备份';
+  exportButton.style.cssText='position:fixed;top:34px;right:8px;z-index:200;padding:5px 10px;border:1px solid #aaa;border-radius:12px;background:white;cursor:pointer;font-size:11px';
+  exportButton.addEventListener('click',exportRecoveryData);document.body.appendChild(exportButton);
+  var local=state;
+  cloudSyncLoad().then(function(result){
+    cloudRowExists=result.exists;
+    if(result.exists){
+      if(!result.data||!result.data.tasks)throw Error('云端数据结构异常');
+      cloudVersion=result.data.updatedAt||null;
+      if(hasSignificantData(local)&&JSON.stringify(local)!==JSON.stringify(result.data)){
+        backupData(local,'加载云端前的本地数据');
+      }
+      state=result.data;
+      try{localStorage.setItem(STORAGE_KEY,JSON.stringify(state))}catch(e){console.error('本地缓存失败',e)}
+    }else if(hasSignificantData(local)){
+      // 云端无记录时保留已有本地内容；首次有效保存才创建记录。
+      state=local;
+    }else{
+      state=getDefaultData();
+    }
+    cloudReady=true;
+    finishInit();
+    updateSyncStatus('synced');
+  }).catch(function(err){
+    // 读取失败时禁止任何云端写入，避免误把空白数据当成权威版本。
+    cloudBlocked=true;
+    console.error(err);
+    finishInit();
+    updateSyncStatus('error');
+    alert('无法读取云端数据。当前仅显示此浏览器的本地内容，同步已暂停；请勿清除浏览器数据。');
+  });
 }
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);
 else init();
